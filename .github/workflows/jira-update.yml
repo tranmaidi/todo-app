@@ -1,0 +1,58 @@
+name: CI + Jira + Slack Integration
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  pull_request_target:
+    types: [closed]
+
+jobs:
+  ci:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    name: Run Java CI
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Build with Maven
+        run: mvn clean install
+
+  update-jira:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    name: Update Jira and Notify Slack
+    steps:
+      - name: Extract Issue Key from Branch
+        id: extract
+        run: |
+          BRANCH_NAME=${{ github.head_ref }}
+          ISSUE_KEY=$(echo "$BRANCH_NAME" | grep -oE '[A-Z]+-[0-9]+')
+          echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Transition Jira Issue
+        if: steps.extract.outputs.ISSUE_KEY != ''
+        run: |
+          curl -X POST \
+            -H "Authorization: Basic $(echo -n '${{ secrets.JIRA_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}' | base64)" \
+            -H "Content-Type: application/json" \
+            --data '{
+              "transition": { "id": "31" }
+            }' \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${{ steps.extract.outputs.ISSUE_KEY }}/transitions"
+      
+      - name: Send Slack Notification
+        if: steps.extract.outputs.ISSUE_KEY != ''
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \"✅ Issue *${{ steps.extract.outputs.ISSUE_KEY }}* đã được đóng và PR đã merge vào main.\"
+            }" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
